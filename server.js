@@ -77,7 +77,8 @@ function encodeCombined(name, token) {
   return Buffer.from(`${name}:${token}`).toString('base64');
 }
 
-// ========== Endpoint ==========
+// ========== ENDPOINT ==========
+// (Semua endpoint spesifik diletakkan SEBELUM route dinamis /:id)
 
 // Health check
 app.get('/', (req, res) => {
@@ -208,33 +209,9 @@ app.get('/raw/:combined', async (req, res) => {
   res.send(`${hash}:${scriptDoc.script}`);
 });
 
-// 4. Baca script asli
-app.get('/:id', async (req, res) => {
-  const id = req.params.id;
-  const { key } = req.query;
-  const scriptDoc = await Script.findOne({ name: id });
-  if (!scriptDoc) return res.status(404).send('Script not found');
-  if (scriptDoc.key !== key) return res.status(403).send('Invalid key');
-  res.send(scriptDoc.script);
-});
-
-// 5. Update script
-app.post('/:id', async (req, res) => {
-  const id = req.params.id;
-  const { script, key } = req.body;
-  const scriptDoc = await Script.findOne({ name: id });
-  if (!scriptDoc) return res.status(404).json({ error: 'Script not found' });
-  if (scriptDoc.key !== key) return res.status(403).json({ error: 'Invalid key' });
-
-  scriptDoc.script = script;
-  await scriptDoc.save();
-  res.json({ success: true, message: 'Script updated' });
-});
-
-// ========== Endpoint Tambahan: Daftar Semua Script (hanya nama) ==========
+// ========== Endpoint Publik: Daftar Semua Script (hanya nama) ==========
 app.get('/scripts', async (req, res) => {
   try {
-    // Ambil hanya field 'name', tanpa '_id'
     const scripts = await Script.find({}, 'name -_id');
     const names = scripts.map(s => s.name);
     res.json(names);
@@ -245,9 +222,9 @@ app.get('/scripts', async (req, res) => {
 });
 
 // ========== Admin Endpoints (dengan password) ==========
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'xzuyaxhubscriptowner'; // ganti di .env
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'xzuyaxhubscriptowner'; // default sesuai keinginan
 
-// Middleware sederhana untuk cek password admin
+// Middleware untuk cek password admin
 function checkAdmin(req, res, next) {
   const { password } = req.query;
   if (password !== ADMIN_PASSWORD) {
@@ -295,10 +272,36 @@ app.delete('/admin/script/:name', checkAdmin, async (req, res) => {
   }
 });
 
-// Hapus script sebagai user biasa (dengan key)
+// ========== ROUTE DINAMIS (untuk akses user biasa) ==========
+// Semua route dengan parameter :id harus diletakkan PALING AKHIR
+
+// Baca script asli (untuk edit) – dengan key sebagai query parameter
+app.get('/:id', async (req, res) => {
+  const id = req.params.id;
+  const { key } = req.query;
+  const scriptDoc = await Script.findOne({ name: id });
+  if (!scriptDoc) return res.status(404).send('Script not found');
+  if (scriptDoc.key !== key) return res.status(403).send('Invalid key');
+  res.send(scriptDoc.script);
+});
+
+// Update script – dengan key di body
+app.post('/:id', async (req, res) => {
+  const id = req.params.id;
+  const { script, key } = req.body;
+  const scriptDoc = await Script.findOne({ name: id });
+  if (!scriptDoc) return res.status(404).json({ error: 'Script not found' });
+  if (scriptDoc.key !== key) return res.status(403).json({ error: 'Invalid key' });
+
+  scriptDoc.script = script;
+  await scriptDoc.save();
+  res.json({ success: true, message: 'Script updated' });
+});
+
+// Hapus script sebagai user biasa (dengan key sebagai query parameter)
 app.delete('/:id', async (req, res) => {
   const id = req.params.id;
-  const { key } = req.query; // key dikirim sebagai query parameter
+  const { key } = req.query;
   try {
     const scriptDoc = await Script.findOne({ name: id });
     if (!scriptDoc) return res.status(404).json({ error: 'Script not found' });
