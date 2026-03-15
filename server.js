@@ -54,7 +54,7 @@ const tokenSchema = new mongoose.Schema({
 });
 const Token = mongoose.model('Token', tokenSchema);
 
-// ========== Fungsi Bantu (sama seperti asli) ==========
+// ========== Fungsi Bantu ==========
 function simpleHash(s) {
   let h = 0;
   for (let i = 0; i < s.length; i++) {
@@ -79,7 +79,7 @@ function encodeCombined(name, token) {
 
 // ========== Endpoint ==========
 
-// Health check untuk Railway
+// Health check
 app.get('/', (req, res) => {
   res.send('Server is running');
 });
@@ -100,7 +100,6 @@ app.post('/create', async (req, res) => {
     const newScript = new Script({ name, script, key });
     await newScript.save();
 
-    // Gunakan host dinamis
     const loader = `loadstring(game:HttpGet("${req.protocol}://${req.get('host')}/loader/${name}"))()`;
     res.json({ success: true, loader, message: 'Script berhasil dibuat' });
   } catch (err) {
@@ -109,23 +108,21 @@ app.post('/create', async (req, res) => {
   }
 });
 
-// 2. Loader (menghasilkan dua stage loader)
+// 2. Loader
 app.get('/loader/:name', async (req, res) => {
   const name = req.params.name;
   const scriptDoc = await Script.findOne({ name });
   if (!scriptDoc) return res.status(404).send('Script not found');
 
-  // Generate token sekali pakai
   const token = Math.random().toString(36).substring(2, 15) +
                 Math.random().toString(36).substring(2, 15);
   const key = `${name}:${token}`;
-  const expires = new Date(Date.now() + 30000); // 30 detik
+  const expires = new Date(Date.now() + 30000);
 
   await Token.create({ key, expires });
 
   const combined = encodeCombined(name, token);
 
-  // Generate nama variabel acak (sama seperti asli)
   const v = {
     rs: randomVar(), to: randomVar(), tk: randomVar(), ur: randomVar(),
     sc: randomVar(), fn: randomVar(), er: randomVar(), bd: randomVar(),
@@ -133,7 +130,6 @@ app.get('/loader/:name', async (req, res) => {
     hf: randomVar(), hc: randomVar(), hs: randomVar()
   };
 
-  // Template token maker (sederhana)
   const tokenMakerTemplate = `
 local ${v.rs}=game:GetService("ReplicatedStorage")
 local ${v.to}=Instance.new("StringValue")
@@ -142,7 +138,6 @@ ${v.to}.Value="${token}"
 ${v.to}.Parent=${v.rs}
 `;
 
-  // Template real script (dengan hash verification)
   const baseUrl = `${req.protocol}://${req.get('host')}`;
   const realScriptTemplate = `
 -- Hash function
@@ -158,27 +153,23 @@ local ${v.to}=${v.rs}:FindFirstChild(${v.sid})
 if not ${v.to} then error("E1") end
 if ${v.to}.Value~=${v.tok} then error("E1") end
 
--- Ambil data dari server (format: hash:script)
+-- Ambil data dari server
 local ${v.u}="${baseUrl}/raw/${combined}"
 local ${v.sc}=game:HttpGet(${v.u})
 if ${v.sc}=="invalid" then error("E2") end
 
--- Pisahkan hash dan script
 local colon=${v.sc}:find(":")
 if not colon then error("E3") end
 local ${v.hs}=${v.sc}:sub(1,colon-1)
 local scriptStr=${v.sc}:sub(colon+1)
 
--- Hitung hash dari script yang diterima
 local ${v.hc}=${v.hf}(scriptStr)
 if ${v.hc}~=${v.hs} then error("E4") end
 
--- Eksekusi
 local ${v.fn},${v.er}=loadstring(scriptStr)
 if not ${v.fn} then error("E5") end
 pcall(${v.fn})
 
--- Hapus token
 ${v.to}:Destroy()
 `;
 
@@ -188,7 +179,7 @@ ${v.to}:Destroy()
   res.send(`loadstring("${escaped1}")()\nloadstring("${escaped2}")()`);
 });
 
-// 3. Raw endpoint (mengembalikan hash:script)
+// 3. Raw endpoint
 app.get('/raw/:combined', async (req, res) => {
   const combined = req.params.combined;
   let decoded;
@@ -217,7 +208,7 @@ app.get('/raw/:combined', async (req, res) => {
   res.send(`${hash}:${scriptDoc.script}`);
 });
 
-// 4. Baca script asli (untuk edit)
+// 4. Baca script asli
 app.get('/:id', async (req, res) => {
   const id = req.params.id;
   const { key } = req.query;
@@ -238,6 +229,87 @@ app.post('/:id', async (req, res) => {
   scriptDoc.script = script;
   await scriptDoc.save();
   res.json({ success: true, message: 'Script updated' });
+});
+
+// ========== Endpoint Tambahan: Daftar Semua Script (hanya nama) ==========
+app.get('/scripts', async (req, res) => {
+  try {
+    // Ambil hanya field 'name', tanpa '_id'
+    const scripts = await Script.find({}, 'name -_id');
+    const names = scripts.map(s => s.name);
+    res.json(names);
+  } catch (err) {
+    console.error('❌ Gagal mengambil daftar script:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ========== Admin Endpoints (dengan password) ==========
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123'; // ganti di .env
+
+// Middleware sederhana untuk cek password admin
+function checkAdmin(req, res, next) {
+  const { password } = req.query;
+  if (password !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+// Dapatkan semua script beserta key (hanya untuk admin)
+app.get('/admin/scripts', checkAdmin, async (req, res) => {
+  try {
+    const scripts = await Script.find({}, 'name key -_id');
+    res.json(scripts);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Dapatkan detail satu script (termasuk script) untuk admin
+app.get('/admin/script/:name', checkAdmin, async (req, res) => {
+  try {
+    const name = req.params.name;
+    const script = await Script.findOne({ name }, 'name script key -_id');
+    if (!script) return res.status(404).json({ error: 'Script not found' });
+    res.json(script);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Hapus script sebagai admin (tanpa key)
+app.delete('/admin/script/:name', checkAdmin, async (req, res) => {
+  try {
+    const name = req.params.name;
+    const result = await Script.deleteOne({ name });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Script not found' });
+    }
+    res.json({ success: true, message: 'Script deleted' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Hapus script sebagai user biasa (dengan key)
+app.delete('/:id', async (req, res) => {
+  const id = req.params.id;
+  const { key } = req.query; // key dikirim sebagai query parameter
+  try {
+    const scriptDoc = await Script.findOne({ name: id });
+    if (!scriptDoc) return res.status(404).json({ error: 'Script not found' });
+    if (scriptDoc.key !== key) return res.status(403).json({ error: 'Invalid key' });
+
+    await Script.deleteOne({ name: id });
+    res.json({ success: true, message: 'Script deleted' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // ========== Jalankan Server ==========
