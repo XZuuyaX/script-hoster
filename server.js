@@ -70,6 +70,11 @@ function toLuaTable(str) {
 
 // ========== Endpoint ==========
 
+// Health check endpoint
+app.get('/', (req, res) => {
+  res.send('Server is running');
+});
+
 // 1. Buat script baru
 app.post('/create', async (req, res) => {
   const { name, script, key } = req.body;
