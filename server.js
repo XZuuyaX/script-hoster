@@ -9,6 +9,15 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Tangkap error yang tidak tertangani
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 // ========== Koneksi MongoDB ==========
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('✅ MongoDB connected'))
