@@ -9,13 +9,32 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Tangkap error yang tidak tertangani
+// ========== Global Error Handlers ==========
 process.on('uncaughtException', (err) => {
   console.error('❌ Uncaught Exception:', err);
+  // Opsional: beri waktu 1 detik untuk logging sebelum keluar
+  setTimeout(() => process.exit(1), 1000);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// ========== Graceful Shutdown (SIGTERM) ==========
+let server; // akan diisi oleh app.listen
+
+process.on('SIGTERM', () => {
+  console.log('⚠️ Received SIGTERM, shutting down gracefully...');
+  server.close(() => {
+    console.log('🔒 HTTP server closed');
+    mongoose.connection.close().then(() => {
+      console.log('🔒 MongoDB connection closed');
+      process.exit(0);
+    }).catch(err => {
+      console.error('Error closing MongoDB:', err);
+      process.exit(1);
+    });
+  });
 });
 
 // ========== Koneksi MongoDB ==========
@@ -33,7 +52,7 @@ const Script = mongoose.model('Script', scriptSchema);
 
 const tokenSchema = new mongoose.Schema({
   key: { type: String, required: true, unique: true }, // "name:token"
-  expires: { type: Date, required: true, expires: 0 }   // TTL index, dokumen akan otomatis dihapus setelah expires
+  expires: { type: Date, required: true, expires: 0 }   // TTL index
 });
 const Token = mongoose.model('Token', tokenSchema);
 
@@ -70,7 +89,7 @@ function toLuaTable(str) {
 
 // ========== Endpoint ==========
 
-// Health check endpoint
+// Health check endpoint (untuk Railway)
 app.get('/', (req, res) => {
   res.send('Server is running');
 });
@@ -91,7 +110,6 @@ app.post('/create', async (req, res) => {
     const newScript = new Script({ name, script, key });
     await newScript.save();
 
-    // Buat loader dengan URL dinamis
     const loader = `loadstring(game:HttpGet("${req.protocol}://${req.get('host')}/loader/${name}"))()`;
     res.json({ success: true, loader, message: 'Script berhasil dibuat' });
   } catch (err) {
@@ -100,49 +118,29 @@ app.post('/create', async (req, res) => {
   }
 });
 
-// 2. Loader (mengembalikan dua stage loader yang sudah di‑escape)
+// 2. Loader
 app.get('/loader/:name', async (req, res) => {
   const name = req.params.name;
   const scriptDoc = await Script.findOne({ name });
   if (!scriptDoc) return res.status(404).send('Script not found');
 
-  // Generate token sekali pakai
   const token = Math.random().toString(36).substring(2, 15) +
                 Math.random().toString(36).substring(2, 15);
   const key = `${name}:${token}`;
   const expires = new Date(Date.now() + 30000); // 30 detik
 
-  // Simpan token ke MongoDB
   await Token.create({ key, expires });
 
   const combined = encodeCombined(name, token);
 
   // Generate nama variabel acak
   const v = {
-    rs: randomVar(),  // ReplicatedStorage
-    to: randomVar(),  // tokenObj
-    tk: randomVar(),  // token value
-    ur: randomVar(),  // url
-    sc: randomVar(),  // scriptContent
-    fn: randomVar(),  // function
-    er: randomVar(),  // error
-    bd: randomVar(),  // base64 decode
-    d: randomVar(),   // decoded
-    sid: randomVar(), // scriptId
-    tok: randomVar(), // token
-    u: randomVar(),   // final url
-    hf: randomVar(),  // hash function
-    hc: randomVar(),  // computed hash
-    hs: randomVar(),  // received hash
-    sd: randomVar(),  // string decoder
-    gs: randomVar(),  // GetService
-    rsName: randomVar(), // ReplicatedStorage string
-    sv: randomVar(),  // StringValue
-    nm: randomVar(),  // Name
-    vl: randomVar(),  // Value
-    pr: randomVar(),  // Parent
-    ffc: randomVar(), // FindFirstChild
-    dst: randomVar(), // Destroy
+    rs: randomVar(), to: randomVar(), tk: randomVar(), ur: randomVar(),
+    sc: randomVar(), fn: randomVar(), er: randomVar(), bd: randomVar(),
+    d: randomVar(), sid: randomVar(), tok: randomVar(), u: randomVar(),
+    hf: randomVar(), hc: randomVar(), hs: randomVar(), sd: randomVar(),
+    gs: randomVar(), rsName: randomVar(), sv: randomVar(), nm: randomVar(),
+    vl: randomVar(), pr: randomVar(), ffc: randomVar(), dst: randomVar(),
   };
 
   // Template token maker
@@ -161,7 +159,6 @@ ${v.to}[${v.vl}]="${token}"
 ${v.to}[${v.pr}]=${v.rs}
 `;
 
-  // Template real script (menggunakan URL dinamis)
   const baseUrl = `${req.protocol}://${req.get('host')}`;
   const realScriptTemplate = `
 -- Hash function
@@ -185,27 +182,23 @@ local ${v.to}=${v.rs}:${v.ffc}(${v.sid})
 if not ${v.to} then error("E1") end
 if ${v.to}[${v.vl}]~=${v.tok} then error("E1") end
 
--- Ambil data dari server (format: hash:script)
+-- Ambil data dari server
 local ${v.u}="${baseUrl}/raw/${combined}"
 local ${v.sc}=game:HttpGet(${v.u})
 if ${v.sc}=="invalid" then error("E2") end
 
--- Pisahkan hash dan script
 local colon=${v.sc}:find(":")
 if not colon then error("E3") end
 local ${v.hs}=${v.sc}:sub(1,colon-1)
 local scriptStr=${v.sc}:sub(colon+1)
 
--- Hitung hash dari script yang diterima
 local ${v.hc}=${v.hf}(scriptStr)
 if ${v.hc}~=${v.hs} then error("E4") end
 
--- Eksekusi
 local ${v.fn},${v.er}=loadstring(scriptStr)
 if not ${v.fn} then error("E5") end
 pcall(${v.fn})
 
--- Hapus token
 ${v.to}:${v.dst}()
 `;
 
@@ -215,7 +208,7 @@ ${v.to}:${v.dst}()
   res.send(`loadstring("${escaped1}")()\nloadstring("${escaped2}")()`);
 });
 
-// 3. Raw endpoint (mengembalikan hash:script)
+// 3. Raw endpoint
 app.get('/raw/:combined', async (req, res) => {
   const combined = req.params.combined;
   let decoded;
@@ -235,7 +228,6 @@ app.get('/raw/:combined', async (req, res) => {
     return res.send('invalid');
   }
 
-  // Hapus token (sekali pakai)
   await Token.deleteOne({ key });
 
   const scriptDoc = await Script.findOne({ name });
@@ -245,7 +237,7 @@ app.get('/raw/:combined', async (req, res) => {
   res.send(`${hash}:${scriptDoc.script}`);
 });
 
-// 4. Baca script asli (untuk edit)
+// 4. Baca script asli
 app.get('/:id', async (req, res) => {
   const id = req.params.id;
   const { key } = req.query;
@@ -269,6 +261,6 @@ app.post('/:id', async (req, res) => {
 });
 
 // ========== Jalankan Server ==========
-app.listen(port, () => {
+server = app.listen(port, () => {
   console.log(`✅ Server berjalan di port ${port}`);
 });
