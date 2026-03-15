@@ -12,7 +12,6 @@ app.use(express.json());
 // ========== Global Error Handlers ==========
 process.on('uncaughtException', (err) => {
   console.error('❌ Uncaught Exception:', err);
-  // Opsional: beri waktu 1 detik untuk logging sebelum keluar
   setTimeout(() => process.exit(1), 1000);
 });
 
@@ -20,9 +19,8 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-// ========== Graceful Shutdown (SIGTERM) ==========
-let server; // akan diisi oleh app.listen
-
+// ========== Graceful Shutdown ==========
+let server;
 process.on('SIGTERM', () => {
   console.log('⚠️ Received SIGTERM, shutting down gracefully...');
   server.close(() => {
@@ -79,17 +77,9 @@ function encodeCombined(name, token) {
   return Buffer.from(`${name}:${token}`).toString('base64');
 }
 
-function toLuaTable(str) {
-  const codes = [];
-  for (let i = 0; i < str.length; i++) {
-    codes.push(str.charCodeAt(i));
-  }
-  return '{' + codes.join(',') + '}';
-}
-
 // ========== Endpoint ==========
 
-// Health check endpoint (untuk Railway)
+// Health check
 app.get('/', (req, res) => {
   res.send('Server is running');
 });
@@ -127,36 +117,25 @@ app.get('/loader/:name', async (req, res) => {
   const token = Math.random().toString(36).substring(2, 15) +
                 Math.random().toString(36).substring(2, 15);
   const key = `${name}:${token}`;
-  const expires = new Date(Date.now() + 30000); // 30 detik
+  const expires = new Date(Date.now() + 30000);
 
   await Token.create({ key, expires });
 
   const combined = encodeCombined(name, token);
 
-  // Generate nama variabel acak
   const v = {
     rs: randomVar(), to: randomVar(), tk: randomVar(), ur: randomVar(),
     sc: randomVar(), fn: randomVar(), er: randomVar(), bd: randomVar(),
     d: randomVar(), sid: randomVar(), tok: randomVar(), u: randomVar(),
-    hf: randomVar(), hc: randomVar(), hs: randomVar(), sd: randomVar(),
-    gs: randomVar(), rsName: randomVar(), sv: randomVar(), nm: randomVar(),
-    vl: randomVar(), pr: randomVar(), ffc: randomVar(), dst: randomVar(),
+    hf: randomVar(), hc: randomVar(), hs: randomVar()
   };
 
-  // Template token maker
   const tokenMakerTemplate = `
-local ${v.sd}=function(t) local r='' for i=1,#t do r=r..string.char(t[i]) end return r end
-local ${v.gs}=${v.sd}(${toLuaTable("GetService")})
-local ${v.rsName}=${v.sd}(${toLuaTable("ReplicatedStorage")})
-local ${v.sv}=${v.sd}(${toLuaTable("StringValue")})
-local ${v.nm}=${v.sd}(${toLuaTable("Name")})
-local ${v.vl}=${v.sd}(${toLuaTable("Value")})
-local ${v.pr}=${v.sd}(${toLuaTable("Parent")})
-local ${v.rs}=game:${v.gs}(${v.rsName})
-local ${v.to}=Instance.new(${v.sv})
-${v.to}[${v.nm}]="${name}"
-${v.to}[${v.vl}]="${token}"
-${v.to}[${v.pr}]=${v.rs}
+local ${v.rs}=game:GetService("ReplicatedStorage")
+local ${v.to}=Instance.new("StringValue")
+${v.to}.Name="${name}"
+${v.to}.Value="${token}"
+${v.to}.Parent=${v.rs}
 `;
 
   const baseUrl = `${req.protocol}://${req.get('host')}`;
@@ -165,22 +144,14 @@ ${v.to}[${v.pr}]=${v.rs}
 local ${v.hf}=function(s) local h=0 for i=1,#s do h=(h*31+string.byte(s,i))%2^32 end return string.format("%08x",h) end
 -- Base64 decode
 local ${v.bd}=function(s) local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/' s=s:gsub('[^'..b..'=]','') return (s:gsub('.',function(x) if x=='=' then return '' end local r,f='',(b:find(x)-1) for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end return r end):gsub('%d%d%d?%d?%d?%d?%d?%d?',function(x) if #x~=8 then return '' end local c=0 for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end return string.char(c) end)) end
--- String decoder
-local ${v.sd}=function(t) local r='' for i=1,#t do r=r..string.char(t[i]) end return r end
-local ${v.gs}=${v.sd}(${toLuaTable("GetService")})
-local ${v.rsName}=${v.sd}(${toLuaTable("ReplicatedStorage")})
-local ${v.ffc}=${v.sd}(${toLuaTable("FindFirstChild")})
-local ${v.dst}=${v.sd}(${toLuaTable("Destroy")})
-local ${v.nm}=${v.sd}(${toLuaTable("Name")})
-local ${v.vl}=${v.sd}(${toLuaTable("Value")})
 
 -- Decode combined dari URL
 local ${v.d}=${v.bd}("${combined}")
 local ${v.sid},${v.tok}=${v.d}:match("([^:]+):(.+)")
-local ${v.rs}=game:${v.gs}(${v.rsName})
-local ${v.to}=${v.rs}:${v.ffc}(${v.sid})
+local ${v.rs}=game:GetService("ReplicatedStorage")
+local ${v.to}=${v.rs}:FindFirstChild(${v.sid})
 if not ${v.to} then error("E1") end
-if ${v.to}[${v.vl}]~=${v.tok} then error("E1") end
+if ${v.to}.Value~=${v.tok} then error("E1") end
 
 -- Ambil data dari server
 local ${v.u}="${baseUrl}/raw/${combined}"
@@ -199,7 +170,7 @@ local ${v.fn},${v.er}=loadstring(scriptStr)
 if not ${v.fn} then error("E5") end
 pcall(${v.fn})
 
-${v.to}:${v.dst}()
+${v.to}:Destroy()
 `;
 
   const escaped1 = escapeToBackslash(tokenMakerTemplate);
@@ -258,6 +229,87 @@ app.post('/:id', async (req, res) => {
   scriptDoc.script = script;
   await scriptDoc.save();
   res.json({ success: true, message: 'Script updated' });
+});
+
+// ========== Endpoint Tambahan: Daftar Semua Script (hanya nama) ==========
+app.get('/scripts', async (req, res) => {
+  try {
+    // Ambil hanya field 'name', tanpa '_id'
+    const scripts = await Script.find({}, 'name -_id');
+    const names = scripts.map(s => s.name);
+    res.json(names);
+  } catch (err) {
+    console.error('❌ Gagal mengambil daftar script:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ========== Admin Endpoints (dengan password) ==========
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123'; // ganti di .env
+
+// Middleware sederhana untuk cek password admin
+function checkAdmin(req, res, next) {
+  const { password } = req.query;
+  if (password !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+// Dapatkan semua script beserta key (hanya untuk admin)
+app.get('/admin/scripts', checkAdmin, async (req, res) => {
+  try {
+    const scripts = await Script.find({}, 'name key -_id');
+    res.json(scripts);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Dapatkan detail satu script (termasuk script) untuk admin
+app.get('/admin/script/:name', checkAdmin, async (req, res) => {
+  try {
+    const name = req.params.name;
+    const script = await Script.findOne({ name }, 'name script key -_id');
+    if (!script) return res.status(404).json({ error: 'Script not found' });
+    res.json(script);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Hapus script sebagai admin (tanpa key)
+app.delete('/admin/script/:name', checkAdmin, async (req, res) => {
+  try {
+    const name = req.params.name;
+    const result = await Script.deleteOne({ name });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Script not found' });
+    }
+    res.json({ success: true, message: 'Script deleted' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Hapus script sebagai user biasa (dengan key)
+app.delete('/:id', async (req, res) => {
+  const id = req.params.id;
+  const { key } = req.query; // key dikirim sebagai query parameter
+  try {
+    const scriptDoc = await Script.findOne({ name: id });
+    if (!scriptDoc) return res.status(404).json({ error: 'Script not found' });
+    if (scriptDoc.key !== key) return res.status(403).json({ error: 'Invalid key' });
+
+    await Script.deleteOne({ name: id });
+    res.json({ success: true, message: 'Script deleted' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // ========== Jalankan Server ==========
