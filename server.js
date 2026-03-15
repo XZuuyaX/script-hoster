@@ -56,8 +56,8 @@ const Token = mongoose.model('Token', tokenSchema);
 
 // ========== Fungsi Bantu ==========
 function simpleHash(s) {
-  // Normalisasi line ending sebelum hash
-  s = s.replace(/\r\n/g, '\n');
+  // Normalisasi: ganti \r\n dengan \n, lalu hapus \r yang tersisa
+  s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   let h = 0;
   for (let i = 0; i < s.length; i++) {
     h = (h * 31 + s.charCodeAt(i)) >>> 0;
@@ -93,8 +93,8 @@ app.post('/create', async (req, res) => {
     return res.status(400).json({ error: 'name, script, key required' });
   }
 
-  // Normalisasi line ending
-  const normalizedScript = script.replace(/\r\n/g, '\n');
+  // Normalisasi script
+  const normalizedScript = script.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
   try {
     const existing = await Script.findOne({ name });
@@ -105,7 +105,7 @@ app.post('/create', async (req, res) => {
     const newScript = new Script({ name, script: normalizedScript, key });
     await newScript.save();
 
-    const loader = `loadstring(game:HttpGet("${req.protocol}://${req.get('host')}/loader/${name}"))()`;
+    const loader = `loadstring(game:HttpGet("${req.protocol}://${req.get('host')}/loader/${encodeURIComponent(name)}"))()`;
     res.json({ success: true, loader, message: 'Script berhasil dibuat' });
   } catch (err) {
     console.error(err);
@@ -122,12 +122,13 @@ app.get('/loader/:name', async (req, res) => {
   const token = Math.random().toString(36).substring(2, 15) +
                 Math.random().toString(36).substring(2, 15);
   const key = `${name}:${token}`;
-  const expires = new Date(Date.now() + 30000);
+  const expires = new Date(Date.now() + 30000); // 30 detik
 
   await Token.create({ key, expires });
 
   const combined = encodeCombined(name, token);
 
+  // Generate variabel acak
   const v = {
     rs: randomVar(), to: randomVar(), tk: randomVar(), ur: randomVar(),
     sc: randomVar(), fn: randomVar(), er: randomVar(), bd: randomVar(),
@@ -171,7 +172,9 @@ local scriptStr=${v.sc}:sub(colon+1)
 
 -- Hitung hash dari script yang diterima
 local ${v.hc}=${v.hf}(scriptStr)
-if ${v.hc}~=${v.hs} then error("E4: Hash mismatch\\nExpected: "..${v.hs}.."\\nGot: "..${v.hc}) end
+if ${v.hc}~=${v.hs} then 
+  error("E4: Hash mismatch\\nExpected: "..${v.hs}.."\\nGot: "..${v.hc}.."\\nScript: "..scriptStr:sub(1,100))
+end
 
 -- Eksekusi
 local ${v.fn},${v.er}=loadstring(scriptStr)
@@ -208,18 +211,19 @@ app.get('/raw/:combined', async (req, res) => {
     return res.send('invalid');
   }
 
+  // Hapus token setelah digunakan
   await Token.deleteOne({ key });
 
   const scriptDoc = await Script.findOne({ name });
   if (!scriptDoc) return res.send('invalid');
 
-  // Normalisasi line ending sebelum hash dan kirim
-  const normalizedScript = scriptDoc.script.replace(/\r\n/g, '\n');
+  // Normalisasi script sebelum dikirim
+  const normalizedScript = scriptDoc.script.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const hash = simpleHash(normalizedScript);
   res.send(`${hash}:${normalizedScript}`);
 });
 
-// 4. Endpoint publik daftar script
+// 4. Daftar publik
 app.get('/scripts', async (req, res) => {
   try {
     const scripts = await Script.find({}, 'name -_id');
@@ -297,7 +301,7 @@ app.post('/:id', async (req, res) => {
   if (scriptDoc.key !== key) return res.status(403).json({ error: 'Invalid key' });
 
   // Normalisasi
-  scriptDoc.script = script.replace(/\r\n/g, '\n');
+  scriptDoc.script = script.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   await scriptDoc.save();
   res.json({ success: true, message: 'Script updated' });
 });
