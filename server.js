@@ -245,7 +245,7 @@ app.get('/scripts', async (req, res) => {
 });
 
 // ========== Admin Endpoints (dengan password) ==========
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123'; // ganti di .env
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'xzuyaxhubscriptowner'; // ganti di .env
 
 // Middleware sederhana untuk cek password admin
 function checkAdmin(req, res, next) {
