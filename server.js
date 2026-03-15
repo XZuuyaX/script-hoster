@@ -56,6 +56,8 @@ const Token = mongoose.model('Token', tokenSchema);
 
 // ========== Fungsi Bantu ==========
 function simpleHash(s) {
+  // Normalisasi line ending sebelum hash
+  s = s.replace(/\r\n/g, '\n');
   let h = 0;
   for (let i = 0; i < s.length; i++) {
     h = (h * 31 + s.charCodeAt(i)) >>> 0;
@@ -77,8 +79,7 @@ function encodeCombined(name, token) {
   return Buffer.from(`${name}:${token}`).toString('base64');
 }
 
-// ========== ENDPOINT ==========
-// (Semua endpoint spesifik diletakkan SEBELUM route dinamis /:id)
+// ========== Endpoint ==========
 
 // Health check
 app.get('/', (req, res) => {
@@ -92,13 +93,16 @@ app.post('/create', async (req, res) => {
     return res.status(400).json({ error: 'name, script, key required' });
   }
 
+  // Normalisasi line ending
+  const normalizedScript = script.replace(/\r\n/g, '\n');
+
   try {
     const existing = await Script.findOne({ name });
     if (existing) {
       return res.status(400).json({ error: 'Nama sudah digunakan' });
     }
 
-    const newScript = new Script({ name, script, key });
+    const newScript = new Script({ name, script: normalizedScript, key });
     await newScript.save();
 
     const loader = `loadstring(game:HttpGet("${req.protocol}://${req.get('host')}/loader/${name}"))()`;
@@ -141,8 +145,8 @@ ${v.to}.Parent=${v.rs}
 
   const baseUrl = `${req.protocol}://${req.get('host')}`;
   const realScriptTemplate = `
--- Hash function
-local ${v.hf}=function(s) local h=0 for i=1,#s do h=(h*31+string.byte(s,i))%2^32 end return string.format("%08x",h) end
+-- Hash function (gunakan modulo 2^32)
+local ${v.hf}=function(s) local h=0 for i=1,#s do h=(h*31+string.byte(s,i))%4294967296 end return string.format("%08x",h) end
 -- Base64 decode
 local ${v.bd}=function(s) local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/' s=s:gsub('[^'..b..'=]','') return (s:gsub('.',function(x) if x=='=' then return '' end local r,f='',(b:find(x)-1) for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end return r end):gsub('%d%d%d?%d?%d?%d?%d?%d?',function(x) if #x~=8 then return '' end local c=0 for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end return string.char(c) end)) end
 
@@ -151,26 +155,30 @@ local ${v.d}=${v.bd}("${combined}")
 local ${v.sid},${v.tok}=${v.d}:match("([^:]+):(.+)")
 local ${v.rs}=game:GetService("ReplicatedStorage")
 local ${v.to}=${v.rs}:FindFirstChild(${v.sid})
-if not ${v.to} then error("E1") end
-if ${v.to}.Value~=${v.tok} then error("E1") end
+if not ${v.to} then error("E1: Token tidak ditemukan") end
+if ${v.to}.Value~=${v.tok} then error("E1: Token tidak cocok") end
 
 -- Ambil data dari server
 local ${v.u}="${baseUrl}/raw/${combined}"
 local ${v.sc}=game:HttpGet(${v.u})
-if ${v.sc}=="invalid" then error("E2") end
+if ${v.sc}=="invalid" then error("E2: Script invalid") end
 
+-- Pisahkan hash dan script
 local colon=${v.sc}:find(":")
-if not colon then error("E3") end
+if not colon then error("E3: Format salah") end
 local ${v.hs}=${v.sc}:sub(1,colon-1)
 local scriptStr=${v.sc}:sub(colon+1)
 
+-- Hitung hash dari script yang diterima
 local ${v.hc}=${v.hf}(scriptStr)
-if ${v.hc}~=${v.hs} then error("E4") end
+if ${v.hc}~=${v.hs} then error("E4: Hash mismatch\\nExpected: "..${v.hs}.."\\nGot: "..${v.hc}) end
 
+-- Eksekusi
 local ${v.fn},${v.er}=loadstring(scriptStr)
-if not ${v.fn} then error("E5") end
+if not ${v.fn} then error("E5: Loadstring error: "..tostring(${v.er})) end
 pcall(${v.fn})
 
+-- Hapus token
 ${v.to}:Destroy()
 `;
 
@@ -205,26 +213,26 @@ app.get('/raw/:combined', async (req, res) => {
   const scriptDoc = await Script.findOne({ name });
   if (!scriptDoc) return res.send('invalid');
 
-  const hash = simpleHash(scriptDoc.script);
-  res.send(`${hash}:${scriptDoc.script}`);
+  // Normalisasi line ending sebelum hash dan kirim
+  const normalizedScript = scriptDoc.script.replace(/\r\n/g, '\n');
+  const hash = simpleHash(normalizedScript);
+  res.send(`${hash}:${normalizedScript}`);
 });
 
-// ========== Endpoint Publik: Daftar Semua Script (hanya nama) ==========
+// 4. Endpoint publik daftar script
 app.get('/scripts', async (req, res) => {
   try {
     const scripts = await Script.find({}, 'name -_id');
-    const names = scripts.map(s => s.name);
-    res.json(names);
+    res.json(scripts.map(s => s.name));
   } catch (err) {
     console.error('❌ Gagal mengambil daftar script:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// ========== Admin Endpoints (dengan password) ==========
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'xzuyaxhubscriptowner'; // default sesuai keinginan
+// ========== Admin Endpoints ==========
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'xzuyaxhubscriptowner';
 
-// Middleware untuk cek password admin
 function checkAdmin(req, res, next) {
   const { password } = req.query;
   if (password !== ADMIN_PASSWORD) {
@@ -233,7 +241,6 @@ function checkAdmin(req, res, next) {
   next();
 }
 
-// Dapatkan semua script beserta key (hanya untuk admin)
 app.get('/admin/scripts', checkAdmin, async (req, res) => {
   try {
     const scripts = await Script.find({}, 'name key -_id');
@@ -244,7 +251,6 @@ app.get('/admin/scripts', checkAdmin, async (req, res) => {
   }
 });
 
-// Dapatkan detail satu script (termasuk script) untuk admin
 app.get('/admin/script/:name', checkAdmin, async (req, res) => {
   try {
     const name = req.params.name;
@@ -257,7 +263,6 @@ app.get('/admin/script/:name', checkAdmin, async (req, res) => {
   }
 });
 
-// Hapus script sebagai admin (tanpa key)
 app.delete('/admin/script/:name', checkAdmin, async (req, res) => {
   try {
     const name = req.params.name;
@@ -272,10 +277,8 @@ app.delete('/admin/script/:name', checkAdmin, async (req, res) => {
   }
 });
 
-// ========== ROUTE DINAMIS (untuk akses user biasa) ==========
-// Semua route dengan parameter :id harus diletakkan PALING AKHIR
-
-// Baca script asli (untuk edit) – dengan key sebagai query parameter
+// ========== Route Dinamis (User) ==========
+// Baca script asli (untuk edit)
 app.get('/:id', async (req, res) => {
   const id = req.params.id;
   const { key } = req.query;
@@ -285,7 +288,7 @@ app.get('/:id', async (req, res) => {
   res.send(scriptDoc.script);
 });
 
-// Update script – dengan key di body
+// Update script
 app.post('/:id', async (req, res) => {
   const id = req.params.id;
   const { script, key } = req.body;
@@ -293,12 +296,13 @@ app.post('/:id', async (req, res) => {
   if (!scriptDoc) return res.status(404).json({ error: 'Script not found' });
   if (scriptDoc.key !== key) return res.status(403).json({ error: 'Invalid key' });
 
-  scriptDoc.script = script;
+  // Normalisasi
+  scriptDoc.script = script.replace(/\r\n/g, '\n');
   await scriptDoc.save();
   res.json({ success: true, message: 'Script updated' });
 });
 
-// Hapus script sebagai user biasa (dengan key sebagai query parameter)
+// Hapus script oleh user (dengan key)
 app.delete('/:id', async (req, res) => {
   const id = req.params.id;
   const { key } = req.query;
