@@ -71,9 +71,9 @@ function encodeCombined(name, token) {
 
 // ========== Endpoint ==========
 
-// Health check
+// Redirect root ke website lain
 app.get('/', (req, res) => {
-  res.send('Server is running');
+  res.redirect(301, 'https://xzuyax-hub.vercel.app');
 });
 
 // 1. Buat script baru
