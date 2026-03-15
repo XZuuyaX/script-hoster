@@ -55,16 +55,6 @@ const tokenSchema = new mongoose.Schema({
 const Token = mongoose.model('Token', tokenSchema);
 
 // ========== Fungsi Bantu ==========
-function simpleHash(s) {
-  // Normalisasi: ganti \r\n dengan \n, lalu hapus \r yang tersisa
-  s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  }
-  return h.toString(16).padStart(8, '0');
-}
-
 function escapeToBackslash(str) {
   return str.split('').map(c => '\\' + c.charCodeAt(0)).join('');
 }
@@ -93,19 +83,16 @@ app.post('/create', async (req, res) => {
     return res.status(400).json({ error: 'name, script, key required' });
   }
 
-  // Normalisasi script
-  const normalizedScript = script.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-
   try {
     const existing = await Script.findOne({ name });
     if (existing) {
       return res.status(400).json({ error: 'Nama sudah digunakan' });
     }
 
-    const newScript = new Script({ name, script: normalizedScript, key });
+    const newScript = new Script({ name, script, key });
     await newScript.save();
 
-    const loader = `loadstring(game:HttpGet("${req.protocol}://${req.get('host')}/loader/${encodeURIComponent(name)}"))()`;
+    const loader = `loadstring(game:HttpGet("${req.protocol}://${req.get('host')}/loader/${name}"))()`;
     res.json({ success: true, loader, message: 'Script berhasil dibuat' });
   } catch (err) {
     console.error(err);
@@ -113,12 +100,13 @@ app.post('/create', async (req, res) => {
   }
 });
 
-// 2. Loader
+// 2. Loader (versi tanpa hash)
 app.get('/loader/:name', async (req, res) => {
   const name = req.params.name;
   const scriptDoc = await Script.findOne({ name });
   if (!scriptDoc) return res.status(404).send('Script not found');
 
+  // Generate token sekali pakai
   const token = Math.random().toString(36).substring(2, 15) +
                 Math.random().toString(36).substring(2, 15);
   const key = `${name}:${token}`;
@@ -128,14 +116,23 @@ app.get('/loader/:name', async (req, res) => {
 
   const combined = encodeCombined(name, token);
 
-  // Generate variabel acak
+  // Generate nama variabel acak
   const v = {
-    rs: randomVar(), to: randomVar(), tk: randomVar(), ur: randomVar(),
-    sc: randomVar(), fn: randomVar(), er: randomVar(), bd: randomVar(),
-    d: randomVar(), sid: randomVar(), tok: randomVar(), u: randomVar(),
-    hf: randomVar(), hc: randomVar(), hs: randomVar()
+    rs: randomVar(),  // ReplicatedStorage
+    to: randomVar(),  // tokenObj
+    tk: randomVar(),  // token value
+    ur: randomVar(),  // url
+    sc: randomVar(),  // scriptContent
+    fn: randomVar(),  // function
+    er: randomVar(),  // error
+    bd: randomVar(),  // base64 decode function
+    d: randomVar(),   // decoded string
+    sid: randomVar(), // scriptId from decode
+    tok: randomVar(), // token from decode
+    u: randomVar()    // final url
   };
 
+  // Template token maker (stage 1)
   const tokenMakerTemplate = `
 local ${v.rs}=game:GetService("ReplicatedStorage")
 local ${v.to}=Instance.new("StringValue")
@@ -144,11 +141,10 @@ ${v.to}.Value="${token}"
 ${v.to}.Parent=${v.rs}
 `;
 
+  // Template real script (stage 2) - tanpa hash
   const baseUrl = `${req.protocol}://${req.get('host')}`;
   const realScriptTemplate = `
--- Hash function (gunakan modulo 2^32)
-local ${v.hf}=function(s) local h=0 for i=1,#s do h=(h*31+string.byte(s,i))%4294967296 end return string.format("%08x",h) end
--- Base64 decode
+-- Base64 decoder
 local ${v.bd}=function(s) local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/' s=s:gsub('[^'..b..'=]','') return (s:gsub('.',function(x) if x=='=' then return '' end local r,f='',(b:find(x)-1) for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end return r end):gsub('%d%d%d?%d?%d?%d?%d?%d?',function(x) if #x~=8 then return '' end local c=0 for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end return string.char(c) end)) end
 
 -- Decode combined dari URL
@@ -159,26 +155,14 @@ local ${v.to}=${v.rs}:FindFirstChild(${v.sid})
 if not ${v.to} then error("E1: Token tidak ditemukan") end
 if ${v.to}.Value~=${v.tok} then error("E1: Token tidak cocok") end
 
--- Ambil data dari server
+-- Ambil script dari server
 local ${v.u}="${baseUrl}/raw/${combined}"
 local ${v.sc}=game:HttpGet(${v.u})
 if ${v.sc}=="invalid" then error("E2: Script invalid") end
 
--- Pisahkan hash dan script
-local colon=${v.sc}:find(":")
-if not colon then error("E3: Format salah") end
-local ${v.hs}=${v.sc}:sub(1,colon-1)
-local scriptStr=${v.sc}:sub(colon+1)
-
--- Hitung hash dari script yang diterima
-local ${v.hc}=${v.hf}(scriptStr)
-if ${v.hc}~=${v.hs} then 
-  error("E4: Hash mismatch\\nExpected: "..${v.hs}.."\\nGot: "..${v.hc}.."\\nScript: "..scriptStr:sub(1,100))
-end
-
--- Eksekusi
-local ${v.fn},${v.er}=loadstring(scriptStr)
-if not ${v.fn} then error("E5: Loadstring error: "..tostring(${v.er})) end
+-- Eksekusi script
+local ${v.fn},${v.er}=loadstring(${v.sc})
+if not ${v.fn} then error("E3: Loadstring error: "..tostring(${v.er})) end
 pcall(${v.fn})
 
 -- Hapus token
@@ -191,7 +175,7 @@ ${v.to}:Destroy()
   res.send(`loadstring("${escaped1}")()\nloadstring("${escaped2}")()`);
 });
 
-// 3. Raw endpoint
+// 3. Raw endpoint (mengembalikan script mentah)
 app.get('/raw/:combined', async (req, res) => {
   const combined = req.params.combined;
   let decoded;
@@ -211,19 +195,15 @@ app.get('/raw/:combined', async (req, res) => {
     return res.send('invalid');
   }
 
-  // Hapus token setelah digunakan
   await Token.deleteOne({ key });
 
   const scriptDoc = await Script.findOne({ name });
   if (!scriptDoc) return res.send('invalid');
 
-  // Normalisasi script sebelum dikirim
-  const normalizedScript = scriptDoc.script.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const hash = simpleHash(normalizedScript);
-  res.send(`${hash}:${normalizedScript}`);
+  res.send(scriptDoc.script);
 });
 
-// 4. Daftar publik
+// 4. Endpoint publik daftar script (hanya nama)
 app.get('/scripts', async (req, res) => {
   try {
     const scripts = await Script.find({}, 'name -_id');
@@ -300,8 +280,7 @@ app.post('/:id', async (req, res) => {
   if (!scriptDoc) return res.status(404).json({ error: 'Script not found' });
   if (scriptDoc.key !== key) return res.status(403).json({ error: 'Invalid key' });
 
-  // Normalisasi
-  scriptDoc.script = script.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  scriptDoc.script = script;
   await scriptDoc.save();
   res.json({ success: true, message: 'Script updated' });
 });
